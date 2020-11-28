@@ -1,0 +1,281 @@
+ /* First : Vacuum for all tables and enable_seqscan=off;*/
+
+QUERY 1
+EXPLAIN ANALYZE SELECT "Host".id, COUNT(*) FROM "Listing", "Host" WHERE
+"Host".id="Listing".host_id GROUP BY "Host".id;
+
+BEFORE ADDING INDEX   
+
+GroupAggregate  (cost=10000003419.40..10000004383.19 rows=6363 width=12) (actual time=205.538..223.606 rows=6363 loops=1)
+  Group Key: "Host".id
+    ->  Merge Join  (cost=10000003419.40..10000004261.85 rows=11541 width=4) (actual time=205.524..218.625 rows=11541 loops=1)
+	    Merge Cond: ("Listing".host_id = "Host".id)
+		->  Sort  (cost=10000003419.11..10000003447.96 rows=11541 width=4) (actual time=205.484..208.388 rows=11541 loops=1)
+			Sort Key: "Listing".host_id
+			Sort Method: quicksort  Memory: 925kB
+				->  Seq Scan on "Listing"  (cost=10000000000.00..10000002640.41 rows=11541 width=4) (actual time=0.008..200.701 rows=11541 loops=1)
+					->  Index Only Scan using "Host_pkey" on "Host"  (cost=0.28..653.73 rows=6363 width=4) (actual time=0.034..3.028 rows=6363 loops=1)
+						Heap Fetches: 6363
+Planning time: 8.671 ms
+Execution time: 225.341 ms
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+AFTER ADDING INDEX
+
+GroupAggregate  (cost=10000003419.40..10000004383.19 rows=6363 width=12) (actual time=15.440..33.303 rows=6363 loops=1)
+  Group Key: "Host".id
+    ->  Merge Join  (cost=10000003419.40..10000004261.85 rows=11541 width=4) (actual time=15.427..28.366 rows=11541 loops=1)
+	    Merge Cond: ("Listing".host_id = "Host".id)
+        ->  Sort  (cost=10000003419.11..10000003447.96 rows=11541 width=4) (actual time=15.389..18.245 rows=11541 loops=1)
+		    Sort Key: "Listing".host_id
+			Sort Method: quicksort  Memory: 925kB
+			    ->  Seq Scan on "Listing"  (cost=10000000000.00..10000002640.41 rows=11541 width=4) (actual time=0.006..10.972 rows=11541 loops=1)
+					->  Index Only Scan using index_for_host on "Host"  (cost=0.28..653.73 rows=6363 width=4) (actual time=0.033..2.947 rows=6363 loops=1)
+					    Heap Fetches: 6363
+Planning time: 0.271 ms
+Execution time: 34.527 ms
+
+/* Query 1: w/out index: 225.341 ms, w/index: 34.527 ms */
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+/*the "Host".id is primary key so no need to add it as index to make the search faster*/
+
+
+QUERY 2
+EXPLAIN ANALYZE SELECT id, price FROM "Listing", "Price" WHERE guests_included > 5
+AND price > 40;
+
+BEFORE ADDING INDEX 
+
+Nested Loop  (cost=10000000196.88..10000022781.44 rows=1569576 width=8) (actual time=0.976..1537.615 rows=2469774 loops=1)
+  ->  Bitmap Heap Scan on "Listing"  (cost=196.88..2837.29 rows=11541 width=4) (actual time=0.942..8.902 rows=11541 loops=1)
+        Heap Blocks: exact=2525
+        ->  Bitmap Index Scan on "Listings_pkey"  (cost=0.00..193.99 rows=11541 width=0) (actual time=0.644..0.645 rows=11541 loops=1)
+			->  Materialize  (cost=10000000000.00..10000000324.80 rows=136 width=4) (actual time=0.000..0.043 rows=214 loops=11541)
+				->  Seq Scan on "Price"  (cost=10000000000.00..10000000324.11 rows=136 width=4) (actual time=0.030..1.304 rows=214 loops=1)
+				Filter: ((guests_included > 5) AND (price > '40'::numeric))
+				Rows Removed by Filter: 11327
+Planning time: 0.163 ms
+Execution time: 1983.223 ms			  
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+AFTER ADDING INDEX 
+
+Nested Loop  (cost=327.68..22840.11 rows=1569576 width=8) (actual time=1.593..1508.758 rows=2469774 loops=1)
+  ->  Bitmap Heap Scan on "Listing"  (cost=196.88..2837.29 rows=11541 width=4) (actual time=0.936..8.878 rows=11541 loops=1)
+       Heap Blocks: exact=2525
+		->  Bitmap Index Scan on "Listings_pkey"  (cost=0.00..193.99 rows=11541 width=0) (actual time=0.638..0.638 rows=11541 loops=1)
+		    ->  Materialize  (cost=130.81..383.47 rows=136 width=4) (actual time=0.000..0.043 rows=214 loops=11541)
+		        ->  Bitmap Heap Scan on "Price"  (cost=130.81..382.79 rows=136 width=4) (actual time=0.653..1.795 rows=214 loops=1)
+		            Recheck Cond: (price > '40'::numeric)
+					Filter: (guests_included > 5)
+					Rows Removed by Filter: 6514
+		            Heap Blocks: exact=15
+						->  Bitmap Index Scan on index_for_price  (cost=0.00..130.78 rows=6732 width=0) (actual time=0.612..0.612 rows=6728 loops=1)
+						    Index Cond: (price > '40'::numeric)
+Planning time: 0.221 ms
+Execution time: 1961.089 ms	
+
+* Query 2: w/out index: 1983.223 ms, w/index: 1961.089 ms */
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+/*there are a lot of listings with a price greater than 40 so with the index we don't wont to search them. The planning time almost doubles due to the filter that we use to remove 6514 listings. Nevertheless, we see that the execution time is less. We expected to be more. In the index, if we include the column guests_included the execution exceeds the original one*/
+
+
+QUERY 3
+EXPLAIN ANALYZE select "Listing_Amenity".listing_id, "Listing_Amenity".amenity_id, "Amenity".amenity_name
+from "Listing_Amenity"
+full outer join "Amenity" on "Listing_Amenity".amenity_id = "Amenity".amenity_id
+						
+BEFORE ADDING INDEX 
+
+Hash Full Join  (cost=6.43..4968.31 rows=290020 width=23) (actual time=1.117..223.378 rows=290020 loops=1)
+  Hash Cond: ("Listing_Amenity".amenity_id = "Amenity".amenity_id)
+    ->  Seq Scan on "Listing_Amenity"  (cost=0.00..4184.20 rows=290020 width=8) (actual time=0.985..79.387 rows=290020 loops=1)
+		->  Hash  (cost=3.97..3.97 rows=197 width=19) (actual time=0.113..0.114 rows=197 loops=1)
+	        Buckets: 1024  Batches: 1  Memory Usage: 19kB
+				->  Seq Scan on "Amenity"  (cost=0.00..3.97 rows=197 width=19) (actual time=0.008..0.054 rows=197 loops=1)
+Planning time: 2.207 ms
+Execution time: 276.667 ms
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+AFTER ADDING INDEX 
+
+Hash Full Join  (cost=6.43..4968.31 rows=290020 width=23) (actual time=0.124..213.614 rows=290020 loops=1)
+  Hash Cond: ("Listing_Amenity".amenity_id = "Amenity".amenity_id)
+    ->  Seq Scan on "Listing_Amenity"  (cost=0.00..4184.20 rows=290020 width=8) (actual time=0.005..66.226 rows=290020 loops=1)
+	  ->  Hash  (cost=3.97..3.97 rows=197 width=19) (actual time=0.112..0.112 rows=197 loops=1)
+	          Buckets: 1024  Batches: 1  Memory Usage: 19kB
+			          ->  Seq Scan on "Amenity"  (cost=0.00..3.97 rows=197 width=19) (actual time=0.008..0.052 rows=197 loops=1)
+Planning time: 0.228 ms
+Execution time: 270.287 ms
+
+* Query 3: w/out index: 276.667 ms, w/index: 270.287 ms */
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+/*As expected the execution time is amlost the same. This happened because amenity_id and listing_id are primary keys and combined are like indexes*/
+
+
+QUERY 4
+EXPLAIN ANALYZE Select "Price".price, "Listing".listing_url, "Room".bedrooms
+from "Price", "Listing"
+join "Room" on "Listing".id = "Room".listing_id
+where "Listing".has_availability is true and "Price".price < 10 and "Room".bedrooms > 5
+
+BEFORE ADDING INDEX 
+
+Nested Loop  (cost=0.29..963.44 rows=2262 width=45) (actual time=11.272..159.985 rows=968 loops=1)
+	->  Nested Loop  (cost=0.29..639.81 rows=58 width=41) (actual time=1.264..22.019 rows=44 loops=1)
+        ->  Seq Scan on "Room"  (cost=0.00..262.26 rows=58 width=8) (actual time=1.241..3.766 rows=44 loops=1)
+		    Filter: (bedrooms > 5)
+			Rows Removed by Filter: 11497
+				->  Index Scan using "Listings_pkey" on "Listing"  (cost=0.29..6.51 rows=1 width=41) (actual time=0.413..0.413 rows=1 loops=44)
+					Index Cond: (id = "Room".listing_id)
+					Filter: (has_availability IS TRUE)
+					    ->  Materialize  (cost=0.00..295.46 rows=39 width=4) (actual time=0.228..3.126 rows=22 loops=44)
+					        ->  Seq Scan on "Price"  (cost=0.00..295.26 rows=39 width=4) (actual time=10.004..137.308 rows=22 loops=1)
+								Filter: (price < '10'::numeric)
+				                Rows Removed by Filter: 11519
+Planning time: 2.626 ms
+Execution time: 160.197 ms
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+AFTER ADDING INDEX 
+
+Nested Loop  (cost=9.61..604.91 rows=2262 width=45) (actual time=0.068..0.941 rows=968 loops=1)
+	->  Nested Loop  (cost=5.02..482.02 rows=58 width=41) (actual time=0.043..0.284 rows=44 loops=1)
+		->  Bitmap Heap Scan on "Room"  (cost=4.73..104.47 rows=58 width=8) (actual time=0.033..0.082 rows=44 loops=1)
+		    Recheck Cond: (bedrooms > 5)
+			Heap Blocks: exact=34
+				->  Bitmap Index Scan on index_for_room  (cost=0.00..4.72 rows=58 width=0) (actual time=0.025..0.026 rows=44 loops=1)
+	                Index Cond: (bedrooms > 5)
+				        ->  Index Scan using "Listings_pkey" on "Listing"  (cost=0.29..6.51 rows=1 width=41) (actual time=0.004..0.004 rows=1 loops=44)
+							Index Cond: (id = "Room".listing_id)
+			                Filter: (has_availability IS TRUE)
+								->  Materialize  (cost=4.59..94.72 rows=39 width=4) (actual time=0.001..0.006 rows=22 loops=44)
+									->  Bitmap Heap Scan on "Price"  (cost=4.59..94.52 rows=39 width=4) (actual time=0.022..0.046 rows=22 loops=1)
+										Recheck Cond: (price < '10'::numeric)	HeapBlocks:exact=16																								    ->  Bitmap Index Scan on index_for_price_room  (cost=0.00..4.58 rows=39 width=0) (actual time=0.018..0.018 rows=22 loops=1)
+												Index Cond: (price < '10'::numeric)
+Planning time: 0.478 ms
+Execution time: 1.154 ms
+
+* Query 4: w/out index: 160.197 ms, w/index: 1.154 ms */
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+/*Using tree indexes reduce significant the execution time. By using as index the price, the bedrooms and has_availability columns on each table, makes the search faster. Filtering the columns means execution will not inculde those entries for example where Price > 10 etc.*/
+
+
+QUERY 5
+EXPLAIN ANALYZE select Count("Review".reviewer_name), "Review".reviewer_name
+from "Review"
+full outer join "Host" on "Host".name = "Review".reviewer_name
+GROUP BY "Review".reviewer_name
+HAVING COUNT("Review".reviewer_name)>1000
+
+BEFORE ADDING INDEX 
+
+HashAggregate  (cost=82508.85..82635.78 rows=12693 width=15) (actual time=3001.804..3011.107 rows=164 loops=1)
+  Group Key: "Review".reviewer_name
+    Filter: (count("Review".reviewer_name) > 1000)
+	  Rows Removed by Filter: 57563
+	    ->  Hash Full Join  (cost=28524.29..69692.80 rows=1708807 width=7) (actual time=1292.884..2163.933 rows=2363558 loops=1)
+		    Hash Cond: (("Host".name)::text = ("Review".reviewer_name)::text)
+				->  Seq Scan on "Host"  (cost=0.00..538.63 rows=6363 width=8) (actual time=0.010..131.036 rows=6363 loops=1)
+			        ->  Hash  (cost=21727.35..21727.35 rows=414235 width=7) (actual time=1289.219..1289.219 rows=414235 loops=1)
+					    Buckets: 131072  Batches: 8  Memory Usage: 3100kB
+							->  Seq Scan on "Review"  (cost=0.00..21727.35 rows=414235 width=7) (actual time=0.948..1118.659 rows=414235 loops=1)
+Planning time: 2.593 ms
+Execution time: 3011.721 ms															
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+AFTER ADDING INDEX 
+
+HashAggregate  (cost=82508.85..82635.78 rows=12693 width=15) (actual time=1860.645..1870.071 rows=164 loops=1)
+  Group Key: "Review".reviewer_name
+    Filter: (count("Review".reviewer_name) > 1000)
+	  Rows Removed by Filter: 57563
+	    ->  Hash Full Join  (cost=28524.29..69692.80 rows=1708807 width=7) (actual time=325.374..1047.959 rows=2363558 loops=1)
+		    Hash Cond: (("Host".name)::text = ("Review".reviewer_name)::text)
+				->  Seq Scan on "Host"  (cost=0.00..538.63 rows=6363 width=8) (actual time=0.007..2.766 rows=6363 loops=1)
+			        ->  Hash  (cost=21727.35..21727.35 rows=414235 width=7) (actual time=323.687..323.688 rows=414235 loops=1)
+						Buckets: 131072  Batches: 8  Memory Usage: 3100kB
+							->  Seq Scan on "Review"  (cost=0.00..21727.35 rows=414235 width=7) (actual time=0.018..167.540 rows=414235 loops=1)
+Planning time: 0.487 ms															
+Execution time: 1870.228 ms
+
+* Query 5: w/out index: 3011.721 ms, w/index: 1870.228 ms */
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+/*Using two indexes reduce the execution time by 1.6. This happened because we didnt use any primary keys and specified the columns we need to make the search faster*/
+
+
+QUERY 6
+EXPLAIN ANALYZE select Count("Geolocation".properties_neighbourhood), "Geolocation".properties_neighbourhood
+from "Geolocation"
+join "Location" on "Location".neighbourhood_cleansed = "Geolocation".properties_neighbourhood
+GROUP BY "Geolocation".properties_neighbourhood
+HAVING (Count("Geolocation".properties_neighbourhood)) > 500
+
+BEFORE ADDING INDEX 
+
+HashAggregate  (cost=602.67..603.12 rows=45 width=166) (actual time=78.447..78.452 rows=7 loops=1)
+	Group Key: "Geolocation".properties_neighbourhood
+	Filter: (count("Geolocation".properties_neighbourhood) > 500)
+	Rows Removed by Filter: 38
+		->  Hash Join  (cost=9.01..516.11 rows=11541 width=158) (actual time=2.526..73.995 rows=11541 loops=1)
+			Hash Cond: (("Location".neighbourhood_cleansed)::text = ("Geolocation".properties_neighbourhood)::text)
+				->  Seq Scan on "Location"  (cost=0.00..348.41 rows=11541 width=29) (actual time=1.150..65.667 rows=11541 loops=1)
+					->  Hash  (cost=8.45..8.45 rows=45 width=158) (actual time=1.365..1.365 rows=45 loops=1)
+						Buckets: 1024  Batches: 1  Memory Usage: 11kB
+				            ->  Seq Scan on "Geolocation"  (cost=0.00..8.45 rows=45 width=158) (actual time=0.557..1.341 rows=45 loops=1)
+Planning time: 0.776 ms
+Execution time: 78.506 ms
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+AFTER ADDING INDEX 
+
+HashAggregate  (cost=602.67..603.12 rows=45 width=166) (actual time=29.350..29.356 rows=7 loops=1)
+	Group Key: "Geolocation".properties_neighbourhood
+    Filter: (count("Geolocation".properties_neighbourhood) > 500)
+	Rows Removed by Filter: 38
+	    ->  Hash Join  (cost=9.01..516.11 rows=11541 width=158) (actual time=0.081..24.879 rows=11541 loops=1)
+		    Hash Cond: (("Location".neighbourhood_cleansed)::text = ("Geolocation".properties_neighbourhood)::text)
+				->  Seq Scan on "Location"  (cost=0.00..348.41 rows=11541 width=29) (actual time=0.009..10.937 rows=11541 loops=1)
+					->  Hash  (cost=8.45..8.45 rows=45 width=158) (actual time=0.066..0.066 rows=45 loops=1)
+			            Buckets: 1024  Batches: 1  Memory Usage: 11kB
+			                ->  Seq Scan on "Geolocation"  (cost=0.00..8.45 rows=45 width=158) (actual time=0.005..0.046 rows=45 loops=1)
+Planning time: 28.199 ms
+Execution time: 29.413 ms
+
+* Query 6: w/out index: 78.506 ms, w/index: 29.413 ms */
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+/*By using this index we reduce the time because neighbourhood_cleansed is not a primary key on the Location table*/
+
+
+QUERY 7
+EXPLAIN ANALYZE SELECT distinct "Room".listing_id
+from "Room"
+join "Calendar" on "Calendar".listing_id = "Room".listing_id
+WHERE "Calendar".available is true and "Room".bed_type = 'Pull-out Sofa'
+
+BEFORE ADDING INDEX
+
+HashAggregate  (cost=33746.36..33747.06 rows=70 width=4) (actual time=422.646..422.664 rows=61 loops=1)
+	Group Key: "Room".listing_id
+		->  Nested Loop  (cost=0.43..33704.96 rows=16561 width=4) (actual time=2.584..418.219 rows=14770 loops=1)
+			->  Seq Scan on "Room"  (cost=0.00..262.26 rows=70 width=4) (actual time=0.012..1.428 rows=70 loops=1)
+				Filter: ((bed_type)::text = 'Pull-out Sofa'::text)
+				Rows Removed by Filter: 11471
+					->  Index Scan using pk_calendar on "Calendar"  (cost=0.43..475.38 rows=237 width=4) (actual time=2.513..5.869 rows=211 loops=70)
+						Index Cond: (listing_id = "Room".listing_id)
+						Filter: (available IS TRUE)
+						Rows Removed by Filter: 154
+Planning time: 9.091 ms
+Execution time: 422.721 ms			  
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+AFTER ADDING INDEX 
+
+HashAggregate  (cost=33494.02..33494.72 rows=70 width=4) (actual time=19.660..19.677 rows=61 loops=1)
+	Group Key: "Room".listing_id
+		->  Nested Loop  (cost=0.72..33452.62 rows=16561 width=4) (actual time=1.965..15.361 rows=14770 loops=1)
+			->  Index Scan using index_for_bed_type on "Room"  (cost=0.29..9.92 rows=70 width=4) (actual time=1.937..1.992 rows=70 loops=1)
+				Index Cond: ((bed_type)::text = 'Pull-out Sofa'::text)
+					->  Index Scan using pk_calendar on "Calendar"  (cost=0.43..475.38 rows=237 width=4) (actual time=0.016..0.106 rows=211 loops=70)
+		                Index Cond: (listing_id = "Room".listing_id)
+						Filter: (available IS TRUE)
+		                Rows Removed by Filter: 154
+Planning time: 0.281 ms
+Execution time: 19.722 ms
+
+* Query 7: w/out index: 422.721 ms, w/index: 19.722 ms */
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+/*By using this index we reduce the time because bed_type is not a primary key on the Room table*/
